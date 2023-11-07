@@ -2,6 +2,7 @@ import json
 import pandas as pd
 import modelop.utils as utils
 import modelop.schema.infer as infer
+import numpy
 from pathlib import Path
 from scipy.stats import ks_2samp
 
@@ -16,7 +17,6 @@ logger = utils.configure_logger()
 def init(init_param):
     logger = utils.configure_logger()
     global NUMERICAL_COLUMNS
-    global CATEGORICAL_COLUMNS
     job_json = init_param
 
     input_schema_definition = infer.extract_input_schema(job_json)
@@ -24,8 +24,36 @@ def init(init_param):
         schema_json=input_schema_definition, check_schema=True
     )
     NUMERICAL_COLUMNS = monitoring_parameters['numerical_columns']
-    CATEGORICAL_COLUMNS = monitoring_parameters['categorical_columns']
 
+def fix_numpy_nans_and_infs_in_dict(values: dict, test_name: str) -> dict:
+    """A function to change all numpy.nan and numpy.inf values in a flat dictionary to python Nones.
+
+    Args:
+        values (dict): Input dict to fix.
+        test_name (str):  Name of test that's calling this function.
+
+    Returns:
+        dict: Fixed dict.
+    """
+
+    for key, val in values.items():
+        # If value is numeric (not None), check for numpy.nan and numpy.inf
+        # If True, change to None, else keep unchanged
+        if val is not None:
+            try:  # Some values are not numeric
+                if numpy.isnan(val):
+                    values[key] = None
+                elif numpy.isinf(val):
+                    logger.warning(
+                        "Infinity encountered while computing %s on column %s! Setting value to None.",
+                        test_name,
+                        key,
+                    )
+                    values[key] = None
+            except TypeError:
+                pass
+
+    return values
 
 #
 # This method is the modelops metrics method.  This is always called with a pandas dataframe that is arraylike, and
@@ -33,25 +61,26 @@ def init(init_param):
 # as the results of the first input asset on the job.  This method will not be invoked until all data has been read
 # from that input asset.
 #
-# For this example, we simply echo back the first row of that data as a json object.  This is useful for things like
-# reading externally generated metrics from an SQL database or an S3 file and having them interpreted as a model test
-# result for the association of these results with a model snapshot.
-#
-# data - The input data of the first input asset of the job, as a pandas dataframe
+# INPUTS: For this metrics model, it takes in the baseline_data and the comparator_data.
 #
 
 # modelop.metrics
-def metrics(df_baseline: pd.DataFrame, df_sample: pd.DataFrame):
+def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     logger.info("Running the metrics function")
 
     ks_tests = []
     for feat in NUMERICAL_COLUMNS:
         logger.info("Computing KS on numerical_column %s", feat)
-        ks_tests.append(ks_2samp(data1=df_baseline.loc[:, feat], data2=df_sample.loc[:, feat]))
+        ks_tests.append(ks_2samp(data1=df_baseline.loc[:, feat], data2=df_comparator.loc[:, feat]))
 
     pvalues = [x[1].round(4) for x in ks_tests]
 
     ks_pvalues = dict(zip(NUMERICAL_COLUMNS, pvalues))
+
+    # Cast numpy.nan and numpy.inf values (if any) to python None for JSON encoding
+    ks_pvalues = fix_numpy_nans_and_infs_in_dict(
+        values=ks_pvalues, test_name="Kolmogorov-Smirnov p-value"
+    )
 
     yield ks_pvalues
 

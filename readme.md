@@ -1,22 +1,23 @@
 # Example Custom Metrics Monitor
-This python code provides a very basic example of a custom monitor, including how to use the init and metrics function, as well as how to test locally with a main() function. This initial example shows how you would incorporate externally generated metrics into the ModelOp system.
-It will read any input asset and echo the first row of information returned from that asset.  So if you, for example,
-stored your metrics in an s3 file generated outside of modelop, you can store it as a simple json record.  This monitor
-will then simply read from that asset and echo the json back out.  That will then be transformed into a model test
-result by the modelop system.
-
-The reason for doing it this way is to allow you to have metrics in SQL, S3 or other secure locations, and allow a
-runtime to be configured with the appropriate credentials.  Then instead of an external entity trying to read those
-directly, or hard coding credentials directly into python, the engine can be configured through secret stores with that
-appropriate access, and only the runtime will read those values and echo them into the ModelOp system for transformation
-into a test result.
+This metrics model calculates data drift between two data sets using the Kolmogorov-Smirnov (KS) 2-sample t-test for 
+each feature that is identified as a "drift candidate". It can be used for testing or on-going monitoring, where 
+typically the first data set is the training or baseline data set, and the second data set is the hold-out or 
+production data set. The output of this metrics model is the KS p-value for each feature
 
 
 ## Input Assets
 
-| Type          | Number | Description                                           |
-| ------------- | ------ | ----------------------------------------------------- |
-| Baseline Data | **1**  | Externally generated metrics in json format           |
+| Type            | Number | Description                                                              |
+|-----------------| ------ |--------------------------------------------------------------------------|
+| Baseline Data   | **1**  | The Baseline or Training data set                                        |
+| Comparator Data | **1**  | The Hold-out or Production data set to compare against the Baseline_Data |
 
 ## Assumptions & Requirements
- - This custom monitor assumes the input is a json object of metrics to be tracked and scored later.
+- Underlying `BUSINESS_MODEL` being monitored has a **job json** asset.
+- Input data contains at least one `numerical` column or one `categorical` column.
+
+## Execution
+1. `init` function accepts the job json asset and validates the input schema (corresponding to the `BUSINESS_MODEL` being monitored).
+2. `metrics` function instantiates the **Data Drift Monitor** class and uses the job json asset to determine the `numerical_columns` and/or `categorical_columns` accordingly.
+3. The **Kolmogorov-Smirnov** data drift test is run.
+4. Test result is returned under the list of `data_drift_ks` tests.

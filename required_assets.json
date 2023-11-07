@@ -3,16 +3,14 @@
         "usage": "INPUT_ASSET",
         "assetRole": "BASELINE_DATA",
         "metaData": {
-            "description": "Baseline data in json format"
+            "description": "Baseline or Training Data that is used as the reference"
         }
     },
     {
-        "usage": "ADDITIONAL_ASSET",
-        "assetRole": "REQUIRED_ASSETS",
-        "name": ".+\\.txt",
-        "filename": "MetadataInformation.txt",
+        "usage": "INPUT_ASSET",
+        "assetRole": "COMPARATOR_DATA",
         "metaData": {
-            "description": "Metadata Information in TXT format - used to extract the Vendor ID, Name, and Version Information"
+            "description": "Comparator Data which is typically the holdout or production data"
         }
     }
 ]

@@ -4,6 +4,6 @@
     "defaultAssociationRole": "PERFORMANCE_MODEL",
     "frequentlyUsed": true,
     "custom": {
-        "modelopPackageVersion": "1.0.0"
+        "modelopPackageVersion": "1.3.1"
     }
 }
