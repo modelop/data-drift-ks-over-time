@@ -21,7 +21,9 @@
   "jobWaitTime": 1696347606333,
   "jobEndTime": 1696347626642,
   "lastUpdateFromRuntime": "2023-10-03T15:40:28.642Z",
-  "jobParameters": {},
+  "jobParameters": {
+    "predictionDateColumn" : "predictionDate"
+  },
   "inputData": [
     {
       "assetId": "7fd582d2-76ab-4f6f-b2e1-bd16eebf2650",
