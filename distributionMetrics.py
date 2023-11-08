@@ -19,12 +19,15 @@ logger = utils.configure_logger()
 def init(init_param):
     logger = utils.configure_logger()
     global NUMERICAL_COLUMNS
-    global CATEGORICAL_COLUMNS
     global PREDICTION_DATE_COLUMN
     global JOB
 
     JOB = init_param
     job = json.loads(init_param['rawJson'])
+
+    # Obtain the "predicton date column" from the job parameters. The user should add a job parameter in the UI called
+    # "predictionDateColumn" and the value should be the name of the field/column in the comparator (production) data
+    # set that contains the predictionDates for each record
     PREDICTION_DATE_COLUMN = job.get('jobParameters', {}).get('predictionDateColumn', "")
 
     input_schema_definition = infer.extract_input_schema(JOB)
@@ -32,7 +35,6 @@ def init(init_param):
         schema_json=input_schema_definition, check_schema=True
     )
     NUMERICAL_COLUMNS = monitoring_parameters['numerical_columns']
-    CATEGORICAL_COLUMNS = monitoring_parameters['categorical_columns']
 
 
 def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
@@ -77,12 +79,19 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     final_result = {}
     p_values_by_day_data = {}
 
+    # Add a column to the production (comparator) data to denote the specific day for the prediction
     df_comparator[PREDICTION_DATE_COLUMN] = pd.to_datetime(df_comparator[PREDICTION_DATE_COLUMN]).dt.strftime(
         "%Y-%m-%d")
+
+    # Get all unique days across the production (comparator) data set
     day_list = sorted(df_comparator[PREDICTION_DATE_COLUMN].unique())
+
+    # Add the first and last prediction date to the test result, which can be used for quick aggregation of test results
     final_result["firstPredictionDate"] = day_list[0]
     final_result["lastPredictionDate"] = day_list[len(day_list)-1]
 
+    # For each feature, calculate the KS 2-sample t-test for each prediction day in the production (comparator) data set
+    # as compared against the baseline data set
     for feat in NUMERICAL_COLUMNS:
         feature_pvalue_array = []
         for day in day_list:
@@ -97,14 +106,17 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
         p_values_by_day_data[feat] = feature_pvalue_array
 
-    final_result["ks_p_values_by_day"] = {"title": "Data Drift Over Time - KS", "x_axis_label": "Day",
+    # Create the "Data Drift over Time" line chart in the final result
+    final_result["Data_Drift_Metrics_By_Day"] = {"title": "Data Drift Over Time - Kolmorogov-Smirnov", "x_axis_label": "Day",
                                           "y_axis_label": "KS P-Value", "data": p_values_by_day_data}
 
-    # Calculate full data profile of baseline and comparator data sets
+    # Calculate the full data profile of the baseline and comparator data sets
     drift_detector = drift.DriftDetector(
         df_baseline=df_baseline, df_sample=df_comparator, job_json=JOB
     )
     full_data_profile = drift_detector.calculate_drift(pre_defined_test="Summary")
+
+    # Create the "Data Profile" table in the final result
     final_result["data_drift"] = full_data_profile["data_drift"]
 
     yield final_result
