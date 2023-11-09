@@ -4,6 +4,7 @@ import modelop.utils as utils
 import modelop.schema.infer as infer
 import numpy
 import modelop.monitors.drift as drift
+import re
 from pathlib import Path
 from scipy.stats import ks_2samp
 
@@ -25,7 +26,7 @@ def init(init_param):
     JOB = init_param
     job = json.loads(init_param['rawJson'])
 
-    # Obtain the "predicton date column" from the job parameters. The user should add a job parameter in the UI called
+    # Obtain the "prediction date column" from the job parameters. The user should add a job parameter in the UI called
     # "predictionDateColumn" and the value should be the name of the field/column in the comparator (production) data
     # set that contains the predictionDates for each record
     PREDICTION_DATE_COLUMN = job.get('jobParameters', {}).get('predictionDateColumn', "")
@@ -64,6 +65,27 @@ def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
 
     return val
 
+
+# Check if the prediction date column contains data of the format YYYY-ww
+def check_if_week_format(input_text):
+    pattern = re.compile(r"^([1-2][0-9]{3}-[0-9]{2})$", re.IGNORECASE)
+    return pattern.match(input_text)
+
+
+# Function to run Kolmogorov-Smirnov (KS) 2-sample t-test
+#
+# INPUTS: baseline_data and a comparator_data set
+# RETURNS: KS p-value (float)
+def run_ks_test(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
+    # Run Kolmogorov-Smirnov 2-sample t-test
+    pvalue_result = ks_2samp(data1=df_baseline, data2=df_comparator)
+
+    # Cast numpy.nan and numpy.inf values (if any) to python None for JSON encoding
+    pvalue_result = fix_numpy_nans_and_infs_in_dict(val=pvalue_result[1])
+
+    return pvalue_result
+
+
 #
 # This method is the modelops metrics method.  This is always called with a pandas dataframe that is arraylike, and
 # contains individual rows represented in a dataframe format that is representative of all of the data that comes in
@@ -71,55 +93,96 @@ def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
 # from that input asset.
 #
 # INPUTS: For this metrics model, it takes in the baseline_data and the comparator_data.
-#
+# RETURNS: dict() of values for a ModelOp Metrics job, that is typically converted into a Model Test Result
 
 # modelop.metrics
 def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     logger.info("Running the metrics function")
     final_result = {}
     p_values_by_day_data = {}
+    run_across_entire_data = False
 
-    # Add a column to the production (comparator) data to denote the specific day for the prediction
-    df_comparator[PREDICTION_DATE_COLUMN] = pd.to_datetime(df_comparator[PREDICTION_DATE_COLUMN]).dt.strftime(
-        "%Y-%m-%d")
+    if PREDICTION_DATE_COLUMN in df_comparator:
 
-    # Get all unique days across the production (comparator) data set
-    day_list = sorted(df_comparator[PREDICTION_DATE_COLUMN].unique())
+        # Check if it is of the format of YYYY-ww
+        week_format_used = check_if_week_format(df_comparator.iloc[0][PREDICTION_DATE_COLUMN])
 
-    # Add the first and last prediction date to the test result, which can be used for quick aggregation of test results
-    final_result["firstPredictionDate"] = day_list[0]
-    final_result["lastPredictionDate"] = day_list[len(day_list)-1]
+        if week_format_used:
+            logger.info("Detected a prediction date column format of YYYY-WW. This will be used")
 
-    # For each feature, calculate the KS 2-sample t-test for each prediction day in the production (comparator) data set
-    # as compared against the baseline data set
-    for feat in NUMERICAL_COLUMNS:
+        else:
+            try:
+                # Format the prediction date column to be of the format YYYY-mm-dd
+                df_comparator[PREDICTION_DATE_COLUMN] = pd.to_datetime(
+                    df_comparator[PREDICTION_DATE_COLUMN]).dt.strftime("%Y-%m-%d")
+                logger.info("Successfully able to extract the prediction date column and format the date column to "
+                            "YYYY-mm-dd format")
+            except ValueError as e:
+                logger.warning("Could not convert the prediction date column format. Please use a standard ISO "
+                               "format. Defaulting to running the metrics on the entire data set")
+                run_across_entire_data = True
+    else:
+        logger.info("no prediction date column provided. Running calculations across the entire data set")
+        run_across_entire_data = True
+
+    if run_across_entire_data:
+        # For each feature, calculate the KS 2-sample t-test between the entire production (comparator) data set
+        # as compared against the baseline data set
         feature_pvalue_array = []
-        for day in day_list:
-            df_comparator_current_day = df_comparator.loc[df_comparator[PREDICTION_DATE_COLUMN] == day]
-            pvalue_result = ks_2samp(data1=df_baseline.loc[:, feat], data2=df_comparator_current_day.loc[:, feat])
 
-            # Cast numpy.nan and numpy.inf values (if any) to python None for JSON encoding
-            pvalue_result = fix_numpy_nans_and_infs_in_dict(
-                val=pvalue_result[1]
-            )
-            feature_pvalue_array.append([day, float(pvalue_result.round(4))])
+        for feat in NUMERICAL_COLUMNS:
+            # Call the KS 2-sample t-test for a given feature
+            pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator.loc[:, feat])
 
-        p_values_by_day_data[feat] = feature_pvalue_array
+            # Add the [feature, p-value] pair to the array of p-values for a given feature
+            feature_pvalue_array.append({"feature": feat, "KS_P-Value": float(pvalue_result.round(4))})
 
-    # Create the "Data Drift over Time" line chart in the final result
-    final_result["Data_Drift_Metrics_By_Day"] = {"title": "Data Drift Over Time - Kolmorogov-Smirnov", "x_axis_label": "Day",
-                                          "y_axis_label": "KS P-Value", "data": p_values_by_day_data}
+        final_result["Data_Drift_Metrics_Full_Data_Set"] = {"title": "Data Drift Across Production Data Set - "
+                                                                     "Kolmorogov-Smirnov", "x_axis_label": "Day",
+                                                            "y_axis_label": "KS P-Value", "data": feature_pvalue_array}
 
-    # Calculate the full data profile of the baseline and comparator data sets
+    else:
+        # Get all unique days across the production (comparator) data set
+        dates_list = sorted(df_comparator[PREDICTION_DATE_COLUMN].unique())
+
+        # Add the first and last prediction date to the test result, which can be used for quick aggregation of test
+        # results
+        final_result["firstPredictionDate"] = dates_list[0]
+        final_result["lastPredictionDate"] = dates_list[len(dates_list) - 1]
+
+        # For each feature, calculate the KS 2-sample t-test for each prediction day in the production (comparator)
+        # data set as compared against the baseline data set
+        for feat in NUMERICAL_COLUMNS:
+            feature_pvalue_array = []
+
+            for date_item in dates_list:
+                df_comparator_current_day = df_comparator.loc[df_comparator[PREDICTION_DATE_COLUMN] == date_item]
+                pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator_current_day.loc[:, feat])
+
+                # Add the [day, p-value] pair to the array of p-values for a given feature
+                feature_pvalue_array.append([date_item, float(pvalue_result.round(4))])
+
+            p_values_by_day_data[feat] = feature_pvalue_array
+
+        # Create the "Data Drift over Time" line chart in the final result
+        final_result["Data_Drift_Metrics_By_Day"] = {"title": "Data Drift Over Time - Kolmorogov-Smirnov",
+                                                     "x_axis_label": "Day",
+                                                     "y_axis_label": "KS P-Value", "data": p_values_by_day_data}
+
+    # Use the OOTB drift package to calculate additional drift metrics
     drift_detector = drift.DriftDetector(
         df_baseline=df_baseline, df_sample=df_comparator, job_json=JOB
     )
+    # Run full data profile of the data sets
     full_data_profile = drift_detector.calculate_drift(pre_defined_test="Summary")
 
-    # Create the "Data Profile" table in the final result
-    final_result["data_drift"] = full_data_profile["data_drift"]
+    # Create the table of Kolmogorov-Smirnov p-values per feature
+    ks_drift_metrics = drift_detector.calculate_drift(pre_defined_test="Kolmogorov-Smirnov", flattening_suffix="_ks_pvalue")
 
-    yield final_result
+    # Merge all drift metrics results for proper display in ModelOp
+    final_result_all = utils.merge(final_result, ks_drift_metrics, full_data_profile)
+
+    yield final_result_all
 
 
 #
@@ -133,8 +196,8 @@ def main():
     init_param = {'rawJson': raw_json}
 
     init(init_param)
-    df1 = pd.read_csv("german_credit_data.csv")
-    df2 = pd.read_csv("german_credit_data2.csv")
+    df1 = pd.read_csv("german_credit_data3.csv")
+    df2 = pd.read_csv("german_credit_data4.csv")
     print(json.dumps(next(metrics(df1, df2)), indent=2))
 
 
