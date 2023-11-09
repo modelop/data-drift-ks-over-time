@@ -5,6 +5,7 @@ import modelop.schema.infer as infer
 import numpy
 import modelop.monitors.drift as drift
 import re
+import time
 from pathlib import Path
 from scipy.stats import ks_2samp
 
@@ -55,10 +56,7 @@ def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
             if numpy.isnan(val):
                 val = None
             elif numpy.isinf(val):
-                logger.warning(
-                    "Infinity encountered while computing %s on column %s! Setting value to None.",
-                    val
-                )
+                logger.warning("Infinity encountered while computing %s on column %s! Setting value to None.", val)
                 val = None
         except TypeError:
             pass
@@ -109,7 +107,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
         if week_format_used:
             logger.info("Detected a prediction date column format of YYYY-WW. This will be used")
-
+            df_comparator[PREDICTION_DATE_COLUMN] = df_comparator[PREDICTION_DATE_COLUMN].apply(lambda x: time.strftime("%Y-%m-%d", time.strptime(x + '-1', "%G-%V-%u")))
         else:
             try:
                 # Format the prediction date column to be of the format YYYY-mm-dd
@@ -142,6 +140,8 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                                                             "y_axis_label": "KS P-Value", "data": feature_pvalue_array}
 
     else:
+        logger.info("Running KS for the given datetimes")
+
         # Get all unique days across the production (comparator) data set
         dates_list = sorted(df_comparator[PREDICTION_DATE_COLUMN].unique())
 
