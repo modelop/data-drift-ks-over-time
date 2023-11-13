@@ -22,7 +22,8 @@
   "jobEndTime": 1696347626642,
   "lastUpdateFromRuntime": "2023-10-03T15:40:28.642Z",
   "jobParameters": {
-    "predictionDateColumn" : "predictionDate"
+    "predictionDateColumn" : "predictionDate",
+    "ksThreshold": 0.05
   },
   "inputData": [
     {

@@ -22,6 +22,7 @@ def init(init_param):
     logger = utils.configure_logger()
     global NUMERICAL_COLUMNS
     global PREDICTION_DATE_COLUMN
+    global KS_THRESHOLD
     global JOB
 
     JOB = init_param
@@ -31,6 +32,12 @@ def init(init_param):
     # "predictionDateColumn" and the value should be the name of the field/column in the comparator (production) data
     # set that contains the predictionDates for each record
     PREDICTION_DATE_COLUMN = job.get('jobParameters', {}).get('predictionDateColumn', "")
+    KS_THRESHOLD = job.get('jobParameters', {}).get('ksThreshold', "")
+    if KS_THRESHOLD:
+        logger.info("KS Threshold extracted from job parameters, using this threshold: " + str(KS_THRESHOLD))
+    else:
+        KS_THRESHOLD = 0.05
+        logger.info('Did not find a KS Threshold in the job parameters, using this default threshold: ' + str(KS_THRESHOLD))
 
     input_schema_definition = infer.extract_input_schema(JOB)
     monitoring_parameters = infer.set_monitoring_parameters(
@@ -120,7 +127,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                                "format. Defaulting to running the metrics on the entire data set")
                 run_across_entire_data = True
     else:
-        logger.info("no prediction date column provided. Running calculations across the entire data set")
+        logger.info("No prediction date column provided. Running calculations across the entire data set")
         run_across_entire_data = True
 
     if run_across_entire_data:
@@ -128,12 +135,32 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
         # as compared against the baseline data set
         feature_pvalue_array = []
 
+        # Create a table of all failed runs
+        ks_failures_current_run = []
+
         for feat in NUMERICAL_COLUMNS:
             # Call the KS 2-sample t-test for a given feature
             pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator.loc[:, feat])
 
             # Add the [feature, p-value] pair to the array of p-values for a given feature
             feature_pvalue_array.append({"feature": feat, "KS_P-Value": float(pvalue_result.round(4))})
+
+            # Check for failures against the threshold. If they exist, add it to the running array
+            failure_details_object = {}
+            if pvalue_result > KS_THRESHOLD:
+                failure_details_object = {"Feature": feat, "KS_P-Value": pvalue_result,
+                                          "Deviation_From_Threshold": (pvalue_result-KS_THRESHOLD).round(4)}
+                count_nulls = str(df_comparator.loc[:, feat].isna().sum())
+                failure_details_object = utils.merge(failure_details_object,
+                                                     df_comparator.loc[:, feat].describe())
+                failure_details_object["Count_Nulls"] = count_nulls
+
+                # print("local failure object is: ", failure_details_object)
+                ks_failures_current_run.append(failure_details_object)
+
+        # Create a Table of the failures
+        # print("KS Failures", ks_failures_current_run)
+        drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
 
         final_result["Data_Drift_Metrics_Full_Data_Set"] = {"title": "Data Drift Across Production Data Set - "
                                                                      "Kolmorogov-Smirnov", "x_axis_label": "Day",
@@ -150,19 +177,42 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
         final_result["firstPredictionDate"] = dates_list[0]
         final_result["lastPredictionDate"] = dates_list[len(dates_list) - 1]
 
+        # Create a table of all failed runs
+        ks_failures_current_run = []
+
         # For each feature, calculate the KS 2-sample t-test for each prediction day in the production (comparator)
         # data set as compared against the baseline data set
         for feat in NUMERICAL_COLUMNS:
             feature_pvalue_array = []
 
             for date_item in dates_list:
+                # Create a failed KS test object for each date in the list
+                failure_details_object = {}
+
                 df_comparator_current_day = df_comparator.loc[df_comparator[PREDICTION_DATE_COLUMN] == date_item]
                 pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator_current_day.loc[:, feat])
 
                 # Add the [day, p-value] pair to the array of p-values for a given feature
                 feature_pvalue_array.append([date_item, float(pvalue_result.round(4))])
 
+                # Check for failures against the threshold. If they exist, add it to the running array
+                failure_details_object = {}
+                if pvalue_result > KS_THRESHOLD:
+                    failure_details_object = {"Feature": feat, "Date": date_item, "KS_P-Value": float(pvalue_result.round(4)),
+                                              "Deviation_From_Threshold": float((pvalue_result-KS_THRESHOLD).round(4))}
+                    count_nulls = str(df_comparator_current_day.loc[:, feat].isna().sum())
+                    failure_details_object = utils.merge(failure_details_object,
+                                                         df_comparator_current_day.loc[:, feat].describe())
+                    failure_details_object["Count_Nulls"] = count_nulls
+
+                    # print("local failure object is: ", failure_details_object)
+                    ks_failures_current_run.append(failure_details_object)
+
             p_values_by_day_data[feat] = feature_pvalue_array
+
+        # Create a Table of the failures
+        print("KS Failures", ks_failures_current_run)
+        drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
 
         # Create the "Data Drift over Time" line chart in the final result
         final_result["Data_Drift_Metrics_By_Day"] = {"title": "Data Drift Over Time - Kolmorogov-Smirnov",
@@ -180,7 +230,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     ks_drift_metrics = drift_detector.calculate_drift(pre_defined_test="Kolmogorov-Smirnov", flattening_suffix="_ks_pvalue")
 
     # Merge all drift metrics results for proper display in ModelOp
-    final_result_all = utils.merge(final_result, ks_drift_metrics, full_data_profile)
+    final_result_all = utils.merge(drift_failures_table, ks_drift_metrics, full_data_profile, final_result)
 
     yield final_result_all
 
@@ -196,8 +246,8 @@ def main():
     init_param = {'rawJson': raw_json}
 
     init(init_param)
-    df1 = pd.read_csv("german_credit_data3.csv")
-    df2 = pd.read_csv("german_credit_data4.csv")
+    df1 = pd.read_csv("german_credit_data5.csv")
+    df2 = pd.read_csv("german_credit_data6.csv")
     print(json.dumps(next(metrics(df1, df2)), indent=2))
 
 
