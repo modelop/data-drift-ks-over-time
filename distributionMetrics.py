@@ -32,12 +32,16 @@ def init(init_param):
     # "predictionDateColumn" and the value should be the name of the field/column in the comparator (production) data
     # set that contains the predictionDates for each record
     PREDICTION_DATE_COLUMN = job.get('jobParameters', {}).get('predictionDateColumn', "")
+
+    # Obtain the threshold above which, the KS test will fail. If none provided in the job parameters, then set to a
+    # default value
     KS_THRESHOLD = job.get('jobParameters', {}).get('ksThreshold', "")
     if KS_THRESHOLD:
         logger.info("KS Threshold extracted from job parameters, using this threshold: " + str(KS_THRESHOLD))
     else:
         KS_THRESHOLD = 0.05
-        logger.info('Did not find a KS Threshold in the job parameters, using this default threshold: ' + str(KS_THRESHOLD))
+        logger.info(
+            'Did not find a KS Threshold in the job parameters, using this default threshold: ' + str(KS_THRESHOLD))
 
     input_schema_definition = infer.extract_input_schema(JOB)
     monitoring_parameters = infer.set_monitoring_parameters(
@@ -46,16 +50,11 @@ def init(init_param):
     NUMERICAL_COLUMNS = monitoring_parameters['numerical_columns']
 
 
+# A function to change numpy.nan or numpy.inf values to python Nones
+#
+# INPUTS: Input to fix.
+# RETURNS: Fixed values
 def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
-    """A function to change numpy.nan or numpy.inf values to python Nones.
-
-    Args:
-        val: Input to fix.
-
-    Returns:
-        val: Fixed values.
-    """
-
     # If value is numeric (not None), check for numpy.nan and numpy.inf
     # If True, change to None, else keep unchanged
     if val is not None:
@@ -71,7 +70,10 @@ def fix_numpy_nans_and_infs_in_dict(val: float) -> float:
     return val
 
 
-# Check if the prediction date column contains data of the format YYYY-ww
+# Function to check if the prediction date column contains data of the format YYYY-ww
+#
+# INPUTS: text, typically a column that contains a date
+# RETURNS: TRUE if it is of the format YYYY-ww
 def check_if_week_format(input_text):
     pattern = re.compile(r"^([1-2][0-9]{3}-[0-9]{2})$", re.IGNORECASE)
     return pattern.match(input_text)
@@ -108,13 +110,15 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     run_across_entire_data = False
 
     if PREDICTION_DATE_COLUMN in df_comparator:
+        # The data contains a date column, so this monitor will compute the drift metrics for each date period
 
         # Check if it is of the format of YYYY-ww
         week_format_used = check_if_week_format(df_comparator.iloc[0][PREDICTION_DATE_COLUMN])
 
         if week_format_used:
             logger.info("Detected a prediction date column format of YYYY-WW. This will be used")
-            df_comparator[PREDICTION_DATE_COLUMN] = df_comparator[PREDICTION_DATE_COLUMN].apply(lambda x: time.strftime("%Y-%m-%d", time.strptime(x + '-1', "%G-%V-%u")))
+            df_comparator[PREDICTION_DATE_COLUMN] = df_comparator[PREDICTION_DATE_COLUMN].apply(
+                lambda x: time.strftime("%Y-%m-%d", time.strptime(x + '-1', "%G-%V-%u")))
         else:
             try:
                 # Format the prediction date column to be of the format YYYY-mm-dd
@@ -127,9 +131,12 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                                "format. Defaulting to running the metrics on the entire data set")
                 run_across_entire_data = True
     else:
+        # Prediction Date column was not provided, so the drift test will run across the entire data set, instead of
+        # calculating the drift values for each day
         logger.info("No prediction date column provided. Running calculations across the entire data set")
         run_across_entire_data = True
 
+    # CASE 1: Run the drift test across the entire data set (a date column was not provided)
     if run_across_entire_data:
         # For each feature, calculate the KS 2-sample t-test between the entire production (comparator) data set
         # as compared against the baseline data set
@@ -149,7 +156,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
             failure_details_object = {}
             if pvalue_result > KS_THRESHOLD:
                 failure_details_object = {"Feature": feat, "KS_P-Value": pvalue_result,
-                                          "Deviation_From_Threshold": (pvalue_result-KS_THRESHOLD).round(4)}
+                                          "Amount_Above_Threshold": (pvalue_result - KS_THRESHOLD).round(4)}
                 count_nulls = str(df_comparator.loc[:, feat].isna().sum())
                 failure_details_object = utils.merge(failure_details_object,
                                                      df_comparator.loc[:, feat].describe())
@@ -159,15 +166,16 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                 ks_failures_current_run.append(failure_details_object)
 
         # Create a Table of the failures
-        # print("KS Failures", ks_failures_current_run)
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
 
+        # Create the Graph of data drift metrics for the full data set
         final_result["Data_Drift_Metrics_Full_Data_Set"] = {"title": "Data Drift Across Production Data Set - "
                                                                      "Kolmorogov-Smirnov", "x_axis_label": "Day",
                                                             "y_axis_label": "KS P-Value", "data": feature_pvalue_array}
 
     else:
-        logger.info("Running KS for the given datetimes")
+        # CASE 2: Run the drift test for each day in the data set
+        logger.info("Running KS for the given days")
 
         # Get all unique days across the production (comparator) data set
         dates_list = sorted(df_comparator[PREDICTION_DATE_COLUMN].unique())
@@ -186,20 +194,22 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
             feature_pvalue_array = []
 
             for date_item in dates_list:
-                # Create a failed KS test object for each date in the list
+                # Create a an object for each failed KS test for each date in the list
                 failure_details_object = {}
 
+                # Run the KS test using the current date
                 df_comparator_current_day = df_comparator.loc[df_comparator[PREDICTION_DATE_COLUMN] == date_item]
                 pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator_current_day.loc[:, feat])
 
                 # Add the [day, p-value] pair to the array of p-values for a given feature
                 feature_pvalue_array.append([date_item, float(pvalue_result.round(4))])
 
-                # Check for failures against the threshold. If they exist, add it to the running array
+                # Check for failures against the threshold. If they exist, add it to the running array of failures
                 failure_details_object = {}
                 if pvalue_result > KS_THRESHOLD:
-                    failure_details_object = {"Feature": feat, "Date": date_item, "KS_P-Value": float(pvalue_result.round(4)),
-                                              "Deviation_From_Threshold": float((pvalue_result-KS_THRESHOLD).round(4))}
+                    failure_details_object = {"Feature": feat, "Date": date_item,
+                                              "KS_P-Value": float(pvalue_result.round(4)),
+                                              "Amount_Above_Threshold": float((pvalue_result - KS_THRESHOLD).round(4))}
                     count_nulls = str(df_comparator_current_day.loc[:, feat].isna().sum())
                     failure_details_object = utils.merge(failure_details_object,
                                                          df_comparator_current_day.loc[:, feat].describe())
@@ -208,10 +218,10 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                     # print("local failure object is: ", failure_details_object)
                     ks_failures_current_run.append(failure_details_object)
 
+            # Add the pvalues per date to the final object for showing drift results over time
             p_values_by_day_data[feat] = feature_pvalue_array
 
         # Create a Table of the failures
-        print("KS Failures", ks_failures_current_run)
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
 
         # Create the "Data Drift over Time" line chart in the final result
@@ -227,7 +237,8 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
     full_data_profile = drift_detector.calculate_drift(pre_defined_test="Summary")
 
     # Create the table of Kolmogorov-Smirnov p-values per feature
-    ks_drift_metrics = drift_detector.calculate_drift(pre_defined_test="Kolmogorov-Smirnov", flattening_suffix="_ks_pvalue")
+    ks_drift_metrics = drift_detector.calculate_drift(pre_defined_test="Kolmogorov-Smirnov",
+                                                      flattening_suffix="_ks_pvalue")
 
     # Merge all drift metrics results for proper display in ModelOp
     final_result_all = utils.merge(drift_failures_table, ks_drift_metrics, full_data_profile, final_result)
@@ -246,8 +257,8 @@ def main():
     init_param = {'rawJson': raw_json}
 
     init(init_param)
-    df1 = pd.read_csv("german_credit_data5.csv")
-    df2 = pd.read_csv("german_credit_data6.csv")
+    df1 = pd.read_csv("german_credit_data3.csv")
+    df2 = pd.read_csv("german_credit_data4.csv")
     print(json.dumps(next(metrics(df1, df2)), indent=2))
 
 
