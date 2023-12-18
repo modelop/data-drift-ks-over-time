@@ -38,6 +38,7 @@ def init(init_param):
     KS_THRESHOLD = job.get('jobParameters', {}).get('ksThreshold', "")
     if KS_THRESHOLD:
         logger.info("KS Threshold extracted from job parameters, using this threshold: " + str(KS_THRESHOLD))
+        KS_THRESHOLD = float(KS_THRESHOLD)
     else:
         KS_THRESHOLD = 0.05
         logger.info(
@@ -146,6 +147,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
         ks_failures_current_run = []
 
         for feat in NUMERICAL_COLUMNS:
+            pvalue_result = None
             # Call the KS 2-sample t-test for a given feature
             pvalue_result = run_ks_test(df_baseline.loc[:, feat], df_comparator.loc[:, feat])
 
@@ -164,6 +166,10 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
                 # print("local failure object is: ", failure_details_object)
                 ks_failures_current_run.append(failure_details_object)
+
+        # Sort by KS_P-Value descending (i.e. which Features have potential drift)
+        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=True)
+        feature_pvalue_array = sorted(feature_pvalue_array, key=lambda x: (x["KS_P-Value"]), reverse=True)
 
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
@@ -220,6 +226,10 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
             # Add the pvalues per date to the final object for showing drift results over time
             p_values_by_day_data[feat] = feature_pvalue_array
+
+        # Sort by KS_P-Value descending (i.e. which Features have potential drift)
+        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=True)
+        p_values_by_day_data = sorted(p_values_by_day_data.items(), key=lambda x: x[1][-1][1], reverse=True)
 
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
