@@ -174,10 +174,8 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
 
-        # Create the Graph of data drift metrics for the full data set
-        final_result["Data_Drift_Metrics_Full_Data_Set"] = {"title": "Data Drift Across Production Data Set - "
-                                                                     "Kolmorogov-Smirnov", "x_axis_label": "Day",
-                                                            "y_axis_label": "KS P-Value", "data": feature_pvalue_array}
+        # Create the Table of all the data drift metrics for all features for the full data set
+        final_result = {"Data_Drift_Metrics_Full_Data_Set": feature_pvalue_array}
 
     else:
         # CASE 2: Run the drift test for each day in the data set
@@ -229,7 +227,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
         # Sort by KS_P-Value descending (i.e. which Features have potential drift)
         ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=True)
-        p_values_by_day_data = sorted(p_values_by_day_data.items(), key=lambda x: x[1][-1][1], reverse=True)
+        p_values_by_day_data = dict(sorted(p_values_by_day_data.items(), key=lambda x: x[1][-1][1], reverse=True))
 
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
@@ -267,8 +265,8 @@ def main():
     init_param = {'rawJson': raw_json}
 
     init(init_param)
-    df1 = pd.read_csv("german_credit_data3.csv")
-    df2 = pd.read_csv("german_credit_data4.csv")
+    df1 = pd.read_csv("german_credit_data.csv")
+    df2 = pd.read_csv("german_credit_data2.csv")
     print(json.dumps(next(metrics(df1, df2)), indent=2))
 
 
