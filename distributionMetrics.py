@@ -249,7 +249,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                                                       flattening_suffix="_ks_pvalue")
 
     # Merge all drift metrics results for proper display in ModelOp
-    final_result_all = utils.merge(drift_failures_table, ks_drift_metrics, full_data_profile, final_result)
+    final_result_all = utils.merge(drift_failures_table, final_result, ks_drift_metrics, full_data_profile)
 
     yield final_result_all
 
