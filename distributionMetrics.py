@@ -156,7 +156,7 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
 
             # Check for failures against the threshold. If they exist, add it to the running array
             failure_details_object = {}
-            if pvalue_result > KS_THRESHOLD:
+            if pvalue_result < KS_THRESHOLD:
                 failure_details_object = {"Feature": feat, "KS_P-Value": pvalue_result,
                                           "Amount_Above_Threshold": (pvalue_result - KS_THRESHOLD).round(4)}
                 count_nulls = str(df_comparator.loc[:, feat].isna().sum())
@@ -168,8 +168,8 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
                 ks_failures_current_run.append(failure_details_object)
 
         # Sort by KS_P-Value descending (i.e. which Features have potential drift)
-        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=True)
-        feature_pvalue_array = sorted(feature_pvalue_array, key=lambda x: (x["KS_P-Value"]), reverse=True)
+        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=False)
+        feature_pvalue_array = sorted(feature_pvalue_array, key=lambda x: (x["KS_P-Value"]), reverse=False)
 
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
@@ -226,8 +226,10 @@ def metrics(df_baseline: pd.DataFrame, df_comparator: pd.DataFrame):
             p_values_by_day_data[feat] = feature_pvalue_array
 
         # Sort by KS_P-Value descending (i.e. which Features have potential drift)
-        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=True)
-        p_values_by_day_data = dict(sorted(p_values_by_day_data.items(), key=lambda x: x[1][-1][1], reverse=True))
+        ks_failures_current_run = sorted(ks_failures_current_run, key=lambda x: (x["KS_P-Value"]), reverse=False)
+        logger.info("pvalues before sorting:" + str(p_values_by_day_data))
+        p_values_by_day_data = dict(sorted(p_values_by_day_data.items(), key=lambda x: x[1][-1][1], reverse=False))
+        logger.info("pvalues AFTER sorting:" + str(p_values_by_day_data))
 
         # Create a Table of the failures
         drift_failures_table = {"Drift_Failures_By_Feature": ks_failures_current_run}
@@ -265,8 +267,8 @@ def main():
     init_param = {'rawJson': raw_json}
 
     init(init_param)
-    df1 = pd.read_csv("german_credit_data.csv")
-    df2 = pd.read_csv("german_credit_data2.csv")
+    df1 = pd.read_csv("german_credit_data3.csv")
+    df2 = pd.read_csv("german_credit_data4.csv")
     print(json.dumps(next(metrics(df1, df2)), indent=2))
 
 
